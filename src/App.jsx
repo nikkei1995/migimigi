@@ -38,25 +38,33 @@ async function supabaseFetch(path, options = {}) {
       ...(options.headers || {}),
     },
   });
-  if (!res.ok && res.status !== 201) {
-    const text = await res.text();
-    throw new Error(text);
-  }
+  if (!res.ok && res.status !== 201) throw new Error(await res.text());
   const text = await res.text();
   return text ? JSON.parse(text) : null;
 }
 
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 export default function App() {
-  const [questions, setQuestions] = useState(QUESTIONS);
+  const [screen, setScreen] = useState("game"); // "game" | "ranking"
+  const [queue, setQueue] = useState(() => shuffle(QUESTIONS));
   const [current, setCurrent] = useState(0);
   const [chosen, setChosen] = useState(null);
   const [votes, setVotes] = useState({});
   const [animating, setAnimating] = useState(false);
   const [revealed, setRevealed] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
   const [bgSide, setBgSide] = useState(null);
+  const [ranking, setRanking] = useState([]);
+  const [rankingLoading, setRankingLoading] = useState(false);
 
-  const q = questions[current];
+  const q = queue[current % queue.length];
   const qKey = q?.title;
   const leftVotes = votes[qKey]?.left || 0;
   const rightVotes = votes[qKey]?.right || 0;
@@ -73,9 +81,7 @@ export default function App() {
       const left = data.filter(r => r.side === "left").length;
       const right = data.filter(r => r.side === "right").length;
       setVotes(v => ({ ...v, [title]: { left, right } }));
-    } catch (e) {
-      console.error("loadVotes error", e);
-    }
+    } catch (e) {}
   }
 
   useEffect(() => {
@@ -95,9 +101,7 @@ export default function App() {
           right: (v[title]?.right || 0) + (side === "right" ? 1 : 0),
         }
       }));
-    } catch (e) {
-      console.error("saveVote error", e);
-    }
+    } catch (e) {}
   }
 
   function handleChoose(side) {
@@ -113,57 +117,47 @@ export default function App() {
   }
 
   function handleNext() {
-    if (current < questions.length - 1) {
-      setAnimating(true);
-      setBgSide(null);
-      setTimeout(() => {
-        setCurrent(c => c + 1);
-        setChosen(null);
-        setRevealed(false);
-        setAnimating(false);
-      }, 400);
-    } else {
-      generateQuestion();
-    }
-  }
-
-  async function generateQuestion() {
-    setAiLoading(true);
-    try {
-      const used = questions.map(q => q.title).join(", ");
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 200,
-          messages: [{
-            role: "user",
-            content: `日本語で「右か左か」ゲームの新しい質問を1つ作って。以下の形式のJSONのみ返して(マークダウン不要):\n{"title":"〇〇といえば？","left":"選択肢A","right":"選択肢B"}\n\n既に使われた質問: ${used}\n\n身近な話題で、どちらかを選びたくなる面白い対立にして。`
-          }]
-        })
-      });
-      const data = await response.json();
-      const text = data.content.map(c => c.text || "").join("");
-      const clean = text.replace(/```json|```/g, "").trim();
-      const newQ = JSON.parse(clean);
-      setQuestions(qs => [...qs, newQ]);
-      setAnimating(true);
-      setBgSide(null);
-      setTimeout(() => {
-        setCurrent(questions.length);
-        setChosen(null);
-        setRevealed(false);
-        setAnimating(false);
-        setAiLoading(false);
-      }, 400);
-    } catch (e) {
-      setAiLoading(false);
-      setCurrent(0);
+    setAnimating(true);
+    setBgSide(null);
+    setTimeout(() => {
+      // 次の問題へ。末尾に達したらシャッフルして再スタート
+      const next = current + 1;
+      if (next >= queue.length) {
+        setQueue(shuffle(QUESTIONS));
+        setCurrent(0);
+      } else {
+        setCurrent(next);
+      }
       setChosen(null);
       setRevealed(false);
-      setBgSide(null);
-    }
+      setAnimating(false);
+    }, 400);
+  }
+
+  async function openRanking() {
+    setScreen("ranking");
+    setRankingLoading(true);
+    try {
+      const data = await supabaseFetch(
+        `/votes?select=question,side`,
+        { headers: { "Prefer": "" } }
+      );
+      // 集計
+      const map = {};
+      for (const row of data) {
+        if (!map[row.question]) map[row.question] = { left: 0, right: 0 };
+        map[row.question][row.side]++;
+      }
+      // 問題情報とマージしてtotal順にソート
+      const result = QUESTIONS.map(q => {
+        const v = map[q.title] || { left: 0, right: 0 };
+        const total = v.left + v.right;
+        const leftPct = total ? Math.round((v.left / total) * 100) : 50;
+        return { ...q, left_votes: v.left, right_votes: v.right, total, leftPct, rightPct: 100 - leftPct };
+      }).sort((a, b) => b.total - a.total);
+      setRanking(result);
+    } catch (e) {}
+    setRankingLoading(false);
   }
 
   const bg = bgSide === 'left' ? '#ff6b35' : bgSide === 'right' ? '#4ecdc4' : '#1a1a2e';
@@ -175,6 +169,7 @@ export default function App() {
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         html, body, #root { width: 100%; height: 100%; overflow: hidden; }
         body { font-family: 'Zen Maru Gothic', sans-serif; overscroll-behavior: none; }
+
         .app {
           width: 100vw; height: 100dvh;
           display: flex; flex-direction: column;
@@ -182,11 +177,15 @@ export default function App() {
           padding: 24px 20px; position: relative;
           overflow: hidden; transition: background 0.5s ease;
         }
-        .counter {
-          position: absolute; top: 16px; right: 20px;
-          color: rgba(255,255,255,0.5); font-size: 13px;
-          font-weight: 700; letter-spacing: 0.1em;
+        .ranking-btn {
+          position: absolute; top: 16px; left: 20px;
+          background: rgba(255,255,255,0.15); border: none;
+          color: white; border-radius: 20px; padding: 8px 16px;
+          font-family: 'Zen Maru Gothic', sans-serif;
+          font-size: 13px; font-weight: 700; cursor: pointer;
+          transition: background 0.2s;
         }
+        .ranking-btn:hover { background: rgba(255,255,255,0.25); }
         .deco {
           position: absolute; border-radius: 50%;
           background: white; opacity: 0.06; pointer-events: none;
@@ -215,7 +214,6 @@ export default function App() {
           font-size: clamp(20px, 5vw, 36px); font-weight: 900;
           color: white; cursor: pointer;
           transition: transform 0.15s, box-shadow 0.15s, opacity 0.3s;
-          letter-spacing: 0.03em;
         }
         .btn-left { background: linear-gradient(135deg,#ff6b35,#f7931e); box-shadow: 0 6px 24px rgba(255,107,53,0.5); }
         .btn-right { background: linear-gradient(135deg,#4ecdc4,#44a8b3); box-shadow: 0 6px 24px rgba(78,205,196,0.5); }
@@ -251,83 +249,156 @@ export default function App() {
           font-weight: 900; font-size: 17px; cursor: pointer;
           box-shadow: 0 4px 20px rgba(0,0,0,0.2);
           animation: popIn 0.4s cubic-bezier(0.34,1.56,0.64,1) both;
-          transition: transform 0.15s, box-shadow 0.15s;
+          transition: transform 0.15s;
         }
-        .next-btn:hover { transform: scale(1.05) translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.3); }
-        .loading { color: rgba(255,255,255,0.7); font-size: 15px; font-weight: 700; }
+        .next-btn:hover { transform: scale(1.05) translateY(-2px); }
+
+        /* ランキング画面 */
+        .ranking-screen {
+          width: 100vw; height: 100dvh;
+          background: #1a1a2e; color: white;
+          display: flex; flex-direction: column;
+          overflow: hidden;
+        }
+        .ranking-header {
+          display: flex; align-items: center; gap: 12px;
+          padding: 20px 20px 12px;
+          border-bottom: 1px solid rgba(255,255,255,0.1);
+          flex-shrink: 0;
+        }
+        .back-btn {
+          background: rgba(255,255,255,0.1); border: none;
+          color: white; border-radius: 50%; width: 36px; height: 36px;
+          font-size: 18px; cursor: pointer; display: flex;
+          align-items: center; justify-content: center;
+          font-family: 'Zen Maru Gothic', sans-serif;
+        }
+        .ranking-title { font-size: 18px; font-weight: 900; }
+        .ranking-list { overflow-y: auto; padding: 16px 20px; flex: 1; }
+        .rank-item {
+          background: rgba(255,255,255,0.06); border-radius: 16px;
+          padding: 16px; margin-bottom: 12px;
+        }
+        .rank-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .rank-num { font-size: 22px; font-weight: 900; opacity: 0.4; width: 32px; }
+        .rank-q { font-size: 15px; font-weight: 700; flex: 1; }
+        .rank-total { font-size: 13px; opacity: 0.5; }
+        .rank-bars { display: flex; gap: 8px; align-items: center; }
+        .rank-bar-wrap { flex: 1; }
+        .rank-bar-label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; opacity: 0.8; }
+        .rank-bar-track { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.1); overflow: hidden; }
+        .rank-bar-fill { height: 100%; border-radius: 4px; }
+
         @keyframes popIn {
           from { opacity: 0; transform: scale(0.7); }
           to { opacity: 1; transform: scale(1); }
         }
       `}</style>
 
-      <div className="app" style={{ background: bg }}>
-        <div className="deco" style={{ width: 350, height: 350, top: -120, left: -120 }} />
-        <div className="deco" style={{ width: 250, height: 250, bottom: -80, right: -80 }} />
-        <div className="counter">Q {current + 1} / {questions.length}</div>
-
-        <div className="inner" style={{
-          opacity: animating ? 0 : 1,
-          transform: animating ? 'translateY(20px)' : 'translateY(0)'
-        }}>
-          <div style={{ textAlign: 'center' }}>
-            <div className="label">どっちを選ぶ？</div>
-            <h1 className="title" style={{ marginTop: 12 }}>{q?.title}</h1>
+      {screen === "ranking" ? (
+        <div className="ranking-screen">
+          <div className="ranking-header">
+            <button className="back-btn" onClick={() => setScreen("game")}>←</button>
+            <div className="ranking-title">🔥 人気ランキング</div>
           </div>
-
-          <div className="choices">
-            <button
-              className={`btn btn-left ${revealed && chosen !== 'left' ? 'unchosen' : ''} ${revealed && chosen === 'left' ? 'chosen' : ''}`}
-              onClick={() => handleChoose('left')}
-              disabled={!!chosen}
-            >{q?.left}</button>
-            <div className="vs">VS</div>
-            <button
-              className={`btn btn-right ${revealed && chosen !== 'right' ? 'unchosen' : ''} ${revealed && chosen === 'right' ? 'chosen' : ''}`}
-              onClick={() => handleChoose('right')}
-              disabled={!!chosen}
-            >{q?.right}</button>
-          </div>
-
-          {revealed && (
-            <>
-              <div className="result">
-                <div className="result-label">みんなの結果（{totalVotes}票）</div>
-                <div className="bar-row">
-                  <div className="bar-header">
-                    <span>{q?.left}</span>
-                    <span className="bar-pct">{leftPct}%</span>
-                  </div>
-                  <div className="bar-track">
-                    <div className="bar-fill" style={{ width: `${leftPct}%`, background: 'linear-gradient(90deg,#ff6b35,#f7931e)' }} />
-                  </div>
+          <div className="ranking-list">
+            {rankingLoading ? (
+              <div style={{ textAlign: "center", opacity: 0.5, marginTop: 40 }}>読み込み中…</div>
+            ) : ranking.map((r, i) => (
+              <div className="rank-item" key={r.title}>
+                <div className="rank-top">
+                  <div className="rank-num">#{i + 1}</div>
+                  <div className="rank-q">{r.title}</div>
+                  <div className="rank-total">{r.total}票</div>
                 </div>
-                <div className="bar-row">
-                  <div className="bar-header">
-                    <span>{q?.right}</span>
-                    <span className="bar-pct">{rightPct}%</span>
+                <div className="rank-bars">
+                  <div className="rank-bar-wrap">
+                    <div className="rank-bar-label">
+                      <span>{r.left}</span>
+                      <span style={{ color: '#ff6b35' }}>{r.leftPct}%</span>
+                    </div>
+                    <div className="rank-bar-track">
+                      <div className="rank-bar-fill" style={{ width: `${r.leftPct}%`, background: 'linear-gradient(90deg,#ff6b35,#f7931e)' }} />
+                    </div>
                   </div>
-                  <div className="bar-track">
-                    <div className="bar-fill" style={{ width: `${rightPct}%`, background: 'linear-gradient(90deg,#4ecdc4,#44a8b3)' }} />
+                  <div style={{ fontSize: 11, opacity: 0.4, flexShrink: 0 }}>vs</div>
+                  <div className="rank-bar-wrap">
+                    <div className="rank-bar-label">
+                      <span>{r.right}</span>
+                      <span style={{ color: '#4ecdc4' }}>{r.rightPct}%</span>
+                    </div>
+                    <div className="rank-bar-track">
+                      <div className="rank-bar-fill" style={{ width: `${r.rightPct}%`, background: 'linear-gradient(90deg,#4ecdc4,#44a8b3)' }} />
+                    </div>
                   </div>
-                </div>
-                <div className="result-msg">
-                  あなたは <strong>「{chosen === 'left' ? q?.left : q?.right}」</strong> を選びました
-                  {" "}{leftPct === rightPct ? "🤝 同率！" : (chosen === 'left' ? leftPct : rightPct) > 50 ? "👏 多数派！" : "🦄 少数派！"}
                 </div>
               </div>
-
-              {aiLoading ? (
-                <div className="loading">AIが次の問題を考え中… 🤔</div>
-              ) : (
-                <button className="next-btn" onClick={handleNext}>
-                  {current === questions.length - 1 ? "AIに次を作ってもらう ✨" : "次の問題へ →"}
-                </button>
-              )}
-            </>
-          )}
+            ))}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="app" style={{ background: bg }}>
+          <div className="deco" style={{ width: 350, height: 350, top: -120, left: -120 }} />
+          <div className="deco" style={{ width: 250, height: 250, bottom: -80, right: -80 }} />
+
+          <button className="ranking-btn" onClick={openRanking}>🔥 ランキング</button>
+
+          <div className="inner" style={{
+            opacity: animating ? 0 : 1,
+            transform: animating ? 'translateY(20px)' : 'translateY(0)'
+          }}>
+            <div style={{ textAlign: 'center' }}>
+              <div className="label">どっちを選ぶ？</div>
+              <h1 className="title" style={{ marginTop: 12 }}>{q?.title}</h1>
+            </div>
+
+            <div className="choices">
+              <button
+                className={`btn btn-left ${revealed && chosen !== 'left' ? 'unchosen' : ''} ${revealed && chosen === 'left' ? 'chosen' : ''}`}
+                onClick={() => handleChoose('left')}
+                disabled={!!chosen}
+              >{q?.left}</button>
+              <div className="vs">VS</div>
+              <button
+                className={`btn btn-right ${revealed && chosen !== 'right' ? 'unchosen' : ''} ${revealed && chosen === 'right' ? 'chosen' : ''}`}
+                onClick={() => handleChoose('right')}
+                disabled={!!chosen}
+              >{q?.right}</button>
+            </div>
+
+            {revealed && (
+              <>
+                <div className="result">
+                  <div className="result-label">みんなの結果（{totalVotes}票）</div>
+                  <div className="bar-row">
+                    <div className="bar-header">
+                      <span>{q?.left}</span>
+                      <span className="bar-pct">{leftPct}%</span>
+                    </div>
+                    <div className="bar-track">
+                      <div className="bar-fill" style={{ width: `${leftPct}%`, background: 'linear-gradient(90deg,#ff6b35,#f7931e)' }} />
+                    </div>
+                  </div>
+                  <div className="bar-row">
+                    <div className="bar-header">
+                      <span>{q?.right}</span>
+                      <span className="bar-pct">{rightPct}%</span>
+                    </div>
+                    <div className="bar-track">
+                      <div className="bar-fill" style={{ width: `${rightPct}%`, background: 'linear-gradient(90deg,#4ecdc4,#44a8b3)' }} />
+                    </div>
+                  </div>
+                  <div className="result-msg">
+                    あなたは <strong>「{chosen === 'left' ? q?.left : q?.right}」</strong> を選びました
+                    {" "}{leftPct === rightPct ? "🤝 同率！" : (chosen === 'left' ? leftPct : rightPct) > 50 ? "👏 多数派！" : "🦄 少数派！"}
+                  </div>
+                </div>
+                <button className="next-btn" onClick={handleNext}>次の問題へ →</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 }
