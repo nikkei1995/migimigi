@@ -1,5 +1,9 @@
 import { useState, useEffect } from "react";
 
+// ここを自分のSupabase情報に書き換えてください
+const SUPABASE_URL = "https://wrqdjlajbqdjbsknlcdu.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndycWRqbGFqYnFkamJza25sY2R1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNzQxMjYsImV4cCI6MjA4Nzk1MDEyNn0.XfItAtlYjKppUfDBQgGn9eEDYT2nsUmOwzaW49J1rI0";
+
 const QUESTIONS = [
   { title: "炭酸飲料といえば？", left: "コーラ", right: "サイダー" },
   { title: "朝ごはんといえば？", left: "パン", right: "ご飯" },
@@ -9,9 +13,38 @@ const QUESTIONS = [
   { title: "映画を見るなら？", left: "映画館", right: "自宅で配信" },
   { title: "スマホといえば？", left: "iPhone", right: "Android" },
   { title: "旅行先は？", left: "国内", right: "海外" },
+  { title: "派閥はどっち？", left: "ラーメン", right: "つけ麺" },
+  { title: "夏といえば？", left: "海", right: "山" },
+  { title: "スイーツといえば？", left: "ケーキ", right: "和菓子" },
+  { title: "運動するなら？", left: "ジム", right: "外でランニング" },
+  { title: "コーヒーの飲み方は？", left: "ブラック", right: "カフェラテ" },
+  { title: "SNSといえば？", left: "X（Twitter）", right: "Instagram" },
+  { title: "音楽を聴くなら？", left: "イヤホン", right: "スピーカー" },
+  { title: "買い物するなら？", left: "ネット通販", right: "実店舗" },
+  { title: "寝るときは？", left: "電気を消す", right: "何か流す" },
+  { title: "風呂派？シャワー派？", left: "湯船に浸かる", right: "シャワーだけ" },
+  { title: "仕事・勉強するなら？", left: "カフェ", right: "家" },
+  { title: "好きなシーズンは？", left: "春・夏", right: "秋・冬" },
 ];
 
-const STORAGE_KEY = "migimigi_votes";
+async function supabaseFetch(path, options = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+    ...options,
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      "Prefer": "return=minimal",
+      ...(options.headers || {}),
+    },
+  });
+  if (!res.ok && res.status !== 201) {
+    const text = await res.text();
+    throw new Error(text);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
 
 export default function App() {
   const [questions, setQuestions] = useState(QUESTIONS);
@@ -31,33 +64,40 @@ export default function App() {
   const leftPct = totalVotes ? Math.round((leftVotes / totalVotes) * 100) : 50;
   const rightPct = totalVotes ? 100 - leftPct : 50;
 
-  useEffect(() => {
-    async function loadVotes() {
-      try {
-        if (window.storage) {
-          const result = await window.storage.get(STORAGE_KEY);
-          if (result) setVotes(JSON.parse(result.value));
-        } else {
-          const saved = localStorage.getItem(STORAGE_KEY);
-          if (saved) setVotes(JSON.parse(saved));
-        }
-      } catch (e) {}
-    }
-    loadVotes();
-  }, []);
-
-  async function saveVote(key, side) {
-    const newVotes = { ...votes };
-    if (!newVotes[key]) newVotes[key] = { left: 0, right: 0 };
-    newVotes[key][side]++;
-    setVotes(newVotes);
+  async function loadVotesForQuestion(title) {
     try {
-      if (window.storage) {
-        await window.storage.set(STORAGE_KEY, JSON.stringify(newVotes), true);
-      } else {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newVotes));
-      }
-    } catch (e) {}
+      const data = await supabaseFetch(
+        `/votes?question=eq.${encodeURIComponent(title)}&select=side`,
+        { headers: { "Prefer": "" } }
+      );
+      const left = data.filter(r => r.side === "left").length;
+      const right = data.filter(r => r.side === "right").length;
+      setVotes(v => ({ ...v, [title]: { left, right } }));
+    } catch (e) {
+      console.error("loadVotes error", e);
+    }
+  }
+
+  useEffect(() => {
+    if (q) loadVotesForQuestion(q.title);
+  }, [current]);
+
+  async function saveVote(title, side) {
+    try {
+      await supabaseFetch("/votes", {
+        method: "POST",
+        body: JSON.stringify({ question: title, side }),
+      });
+      setVotes(v => ({
+        ...v,
+        [title]: {
+          left: (v[title]?.left || 0) + (side === "left" ? 1 : 0),
+          right: (v[title]?.right || 0) + (side === "right" ? 1 : 0),
+        }
+      }));
+    } catch (e) {
+      console.error("saveVote error", e);
+    }
   }
 
   function handleChoose(side) {
@@ -132,214 +172,89 @@ export default function App() {
     <>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@700;900&display=swap');
-
-        *, *::before, *::after {
-          box-sizing: border-box;
-          margin: 0;
-          padding: 0;
-        }
-
-        html, body, #root {
-          width: 100%;
-          height: 100%;
-          overflow: hidden;
-        }
-
-        body {
-          font-family: 'Zen Maru Gothic', sans-serif;
-          overscroll-behavior: none;
-        }
-
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body, #root { width: 100%; height: 100%; overflow: hidden; }
+        body { font-family: 'Zen Maru Gothic', sans-serif; overscroll-behavior: none; }
         .app {
-          width: 100vw;
-          height: 100dvh;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          padding: 24px 20px;
-          position: relative;
-          overflow: hidden;
-          transition: background 0.5s ease;
+          width: 100vw; height: 100dvh;
+          display: flex; flex-direction: column;
+          align-items: center; justify-content: center;
+          padding: 24px 20px; position: relative;
+          overflow: hidden; transition: background 0.5s ease;
         }
-
         .counter {
-          position: absolute;
-          top: 16px;
-          right: 20px;
-          color: rgba(255,255,255,0.5);
-          font-size: 13px;
-          font-weight: 700;
-          letter-spacing: 0.1em;
+          position: absolute; top: 16px; right: 20px;
+          color: rgba(255,255,255,0.5); font-size: 13px;
+          font-weight: 700; letter-spacing: 0.1em;
         }
-
         .deco {
-          position: absolute;
-          border-radius: 50%;
-          background: white;
-          opacity: 0.06;
-          pointer-events: none;
+          position: absolute; border-radius: 50%;
+          background: white; opacity: 0.06; pointer-events: none;
         }
-
         .inner {
-          width: 100%;
-          max-width: 480px;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 24px;
+          width: 100%; max-width: 480px;
+          display: flex; flex-direction: column;
+          align-items: center; gap: 24px;
           transition: opacity 0.3s, transform 0.3s;
         }
-
         .label {
-          background: rgba(255,255,255,0.12);
-          border-radius: 20px;
-          padding: 6px 18px;
-          color: rgba(255,255,255,0.7);
-          font-size: 12px;
-          font-weight: 700;
-          letter-spacing: 0.15em;
-          text-transform: uppercase;
+          background: rgba(255,255,255,0.12); border-radius: 20px;
+          padding: 6px 18px; color: rgba(255,255,255,0.7);
+          font-size: 12px; font-weight: 700;
+          letter-spacing: 0.15em; text-transform: uppercase;
         }
-
         .title {
-          color: white;
-          font-size: clamp(28px, 7vw, 48px);
-          font-weight: 900;
-          text-align: center;
-          line-height: 1.3;
+          color: white; font-size: clamp(28px, 7vw, 48px);
+          font-weight: 900; text-align: center; line-height: 1.3;
           text-shadow: 0 3px 20px rgba(0,0,0,0.3);
         }
-
-        .choices {
-          width: 100%;
-          display: flex;
-          gap: 12px;
-          align-items: center;
-        }
-
+        .choices { width: 100%; display: flex; gap: 12px; align-items: center; }
         .btn {
-          flex: 1;
-          min-height: 120px;
-          border: none;
-          border-radius: 20px;
+          flex: 1; min-height: 120px; border: none; border-radius: 20px;
           font-family: 'Zen Maru Gothic', sans-serif;
-          font-size: clamp(20px, 5vw, 36px);
-          font-weight: 900;
-          color: white;
-          cursor: pointer;
+          font-size: clamp(20px, 5vw, 36px); font-weight: 900;
+          color: white; cursor: pointer;
           transition: transform 0.15s, box-shadow 0.15s, opacity 0.3s;
           letter-spacing: 0.03em;
         }
-
-        .btn-left {
-          background: linear-gradient(135deg, #ff6b35, #f7931e);
-          box-shadow: 0 6px 24px rgba(255,107,53,0.5);
-        }
-
-        .btn-right {
-          background: linear-gradient(135deg, #4ecdc4, #44a8b3);
-          box-shadow: 0 6px 24px rgba(78,205,196,0.5);
-        }
-
+        .btn-left { background: linear-gradient(135deg,#ff6b35,#f7931e); box-shadow: 0 6px 24px rgba(255,107,53,0.5); }
+        .btn-right { background: linear-gradient(135deg,#4ecdc4,#44a8b3); box-shadow: 0 6px 24px rgba(78,205,196,0.5); }
         .btn:hover:not(:disabled) { transform: scale(1.04) translateY(-3px); }
         .btn:active:not(:disabled) { transform: scale(0.96); }
         .btn.unchosen { opacity: 0.3; transform: scale(0.93); }
         .btn.chosen { transform: scale(1.06) translateY(-4px); }
-
         .vs {
-          width: 48px;
-          height: 48px;
-          flex-shrink: 0;
-          background: #1a1a2e;
-          color: white;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-weight: 900;
-          font-size: 14px;
-          box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+          width: 48px; height: 48px; flex-shrink: 0;
+          background: #1a1a2e; color: white; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          font-weight: 900; font-size: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);
         }
-
         .result {
-          width: 100%;
-          background: rgba(255,255,255,0.12);
-          backdrop-filter: blur(12px);
-          border-radius: 20px;
-          padding: 20px;
-          color: white;
+          width: 100%; background: rgba(255,255,255,0.12);
+          backdrop-filter: blur(12px); border-radius: 20px;
+          padding: 20px; color: white;
           animation: popIn 0.4s cubic-bezier(0.34,1.56,0.64,1) both;
         }
-
         .result-label {
-          font-size: 12px;
-          font-weight: 700;
-          letter-spacing: 0.12em;
-          opacity: 0.7;
-          text-align: center;
-          margin-bottom: 16px;
-          text-transform: uppercase;
+          font-size: 12px; font-weight: 700; letter-spacing: 0.12em;
+          opacity: 0.7; text-align: center; margin-bottom: 16px; text-transform: uppercase;
         }
-
         .bar-row { margin-bottom: 10px; }
-
-        .bar-header {
-          display: flex;
-          justify-content: space-between;
-          margin-bottom: 6px;
-          font-size: 14px;
-          font-weight: 700;
-        }
-
+        .bar-header { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 14px; font-weight: 700; }
         .bar-pct { font-size: 20px; font-weight: 900; }
-
-        .bar-track {
-          height: 12px;
-          border-radius: 6px;
-          background: rgba(255,255,255,0.15);
-          overflow: hidden;
-        }
-
-        .bar-fill {
-          height: 100%;
-          border-radius: 6px;
-          transition: width 0.8s cubic-bezier(0.34,1.56,0.64,1);
-        }
-
-        .result-msg {
-          margin-top: 14px;
-          text-align: center;
-          font-size: 14px;
-          opacity: 0.8;
-        }
-
+        .bar-track { height: 12px; border-radius: 6px; background: rgba(255,255,255,0.15); overflow: hidden; }
+        .bar-fill { height: 100%; border-radius: 6px; transition: width 0.8s cubic-bezier(0.34,1.56,0.64,1); }
+        .result-msg { margin-top: 14px; text-align: center; font-size: 14px; opacity: 0.8; }
         .next-btn {
-          background: white;
-          color: #1a1a2e;
-          border: none;
-          border-radius: 50px;
-          padding: 16px 40px;
-          font-family: 'Zen Maru Gothic', sans-serif;
-          font-weight: 900;
-          font-size: 17px;
-          cursor: pointer;
+          background: white; color: #1a1a2e; border: none; border-radius: 50px;
+          padding: 16px 40px; font-family: 'Zen Maru Gothic', sans-serif;
+          font-weight: 900; font-size: 17px; cursor: pointer;
           box-shadow: 0 4px 20px rgba(0,0,0,0.2);
           animation: popIn 0.4s cubic-bezier(0.34,1.56,0.64,1) both;
           transition: transform 0.15s, box-shadow 0.15s;
         }
-
-        .next-btn:hover {
-          transform: scale(1.05) translateY(-2px);
-          box-shadow: 0 8px 30px rgba(0,0,0,0.3);
-        }
-
-        .loading {
-          color: rgba(255,255,255,0.7);
-          font-size: 15px;
-          font-weight: 700;
-        }
-
+        .next-btn:hover { transform: scale(1.05) translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.3); }
+        .loading { color: rgba(255,255,255,0.7); font-size: 15px; font-weight: 700; }
         @keyframes popIn {
           from { opacity: 0; transform: scale(0.7); }
           to { opacity: 1; transform: scale(1); }
@@ -349,7 +264,6 @@ export default function App() {
       <div className="app" style={{ background: bg }}>
         <div className="deco" style={{ width: 350, height: 350, top: -120, left: -120 }} />
         <div className="deco" style={{ width: 250, height: 250, bottom: -80, right: -80 }} />
-
         <div className="counter">Q {current + 1} / {questions.length}</div>
 
         <div className="inner" style={{
@@ -367,9 +281,7 @@ export default function App() {
               onClick={() => handleChoose('left')}
               disabled={!!chosen}
             >{q?.left}</button>
-
             <div className="vs">VS</div>
-
             <button
               className={`btn btn-right ${revealed && chosen !== 'right' ? 'unchosen' : ''} ${revealed && chosen === 'right' ? 'chosen' : ''}`}
               onClick={() => handleChoose('right')}
@@ -381,7 +293,6 @@ export default function App() {
             <>
               <div className="result">
                 <div className="result-label">みんなの結果（{totalVotes}票）</div>
-
                 <div className="bar-row">
                   <div className="bar-header">
                     <span>{q?.left}</span>
@@ -391,7 +302,6 @@ export default function App() {
                     <div className="bar-fill" style={{ width: `${leftPct}%`, background: 'linear-gradient(90deg,#ff6b35,#f7931e)' }} />
                   </div>
                 </div>
-
                 <div className="bar-row">
                   <div className="bar-header">
                     <span>{q?.right}</span>
@@ -401,7 +311,6 @@ export default function App() {
                     <div className="bar-fill" style={{ width: `${rightPct}%`, background: 'linear-gradient(90deg,#4ecdc4,#44a8b3)' }} />
                   </div>
                 </div>
-
                 <div className="result-msg">
                   あなたは <strong>「{chosen === 'left' ? q?.left : q?.right}」</strong> を選びました
                   {" "}{leftPct === rightPct ? "🤝 同率！" : (chosen === 'left' ? leftPct : rightPct) > 50 ? "👏 多数派！" : "🦄 少数派！"}
