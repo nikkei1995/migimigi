@@ -153,7 +153,7 @@ function ShareModal({ data, onClose }) {
 }
 
 // ===== トップ画面 =====
-function TopScreen({ onSearch, onPost, onMyPosts, onRanking }) {
+function TopScreen({ onSearch, onPost, onMyPosts, onRanking, onAllQuestions }) {
   const [hot, setHot] = useState([]);
   const [fresh, setFresh] = useState([]);
   const [samples, setSamples] = useState([]);
@@ -217,6 +217,10 @@ function TopScreen({ onSearch, onPost, onMyPosts, onRanking }) {
             <div className="section-label">📝 サンプル</div>
             {samples.map(q => <QuestionCard key={q.id} q={q} answered={{}} isSample={true}
               onShare={(q, l, r) => setShareModal({ q, leftPct: l, rightPct: r })} />)}
+
+            <button className="all-questions-btn" onClick={onAllQuestions}>
+              💬 みんなが作った質問をもっと見る →
+            </button>
           </>
         )}
         <div style={{ height: 80 }} />
@@ -410,6 +414,65 @@ function RankingScreen({ onBack }) {
   );
 }
 
+// ===== みんなの質問一覧画面 =====
+function AllQuestionsScreen({ onBack }) {
+  const [questions, setQuestions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [answered, setAnsweredState] = useState(getAnswered());
+  const [shareModal, setShareModal] = useState(null);
+  const [sort, setSort] = useState("new"); // "new" | "hot"
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const [qs, votes] = await Promise.all([
+          sb("/questions?select=*&order=created_at.desc&limit=200", { headers: { Prefer: "" } }),
+          sb("/votes?select=question,side", { headers: { Prefer: "" } }),
+        ]);
+        const voteMap = buildVoteMap(votes);
+        const userList = (qs || [])
+          .filter(q => !SAMPLE_TITLES.has(q.title))
+          .map(q => ({
+            ...q,
+            left_votes: voteMap[q.title]?.left || 0,
+            right_votes: voteMap[q.title]?.right || 0,
+            total: (voteMap[q.title]?.left || 0) + (voteMap[q.title]?.right || 0),
+          }));
+        setQuestions(userList);
+      } catch (e) {}
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  const sorted = sort === "hot"
+    ? [...questions].sort((a, b) => b.total - a.total)
+    : [...questions].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  return (
+    <div className="screen">
+      <div className="sub-header">
+        <button className="back-btn" onClick={onBack}>←</button>
+        <div className="sub-title">💬 みんなの質問</div>
+        <div className="sort-tabs">
+          <button className={`sort-tab ${sort === "new" ? "active" : ""}`} onClick={() => setSort("new")}>新着</button>
+          <button className={`sort-tab ${sort === "hot" ? "active" : ""}`} onClick={() => setSort("hot")}>人気</button>
+        </div>
+      </div>
+      <div className="scrollable">
+        {loading ? <div className="loading-msg">読み込み中…</div>
+          : sorted.length === 0 ? <div className="loading-msg">まだ質問がありません</div>
+          : sorted.map(q => (
+            <QuestionCard key={q.id} q={q} answered={answered}
+              onVote={() => setAnsweredState(getAnswered())}
+              onShare={(q, l, r) => setShareModal({ q, leftPct: l, rightPct: r })} />
+          ))}
+      </div>
+      <ShareModal data={shareModal} onClose={() => setShareModal(null)} />
+    </div>
+  );
+}
+
 // ===== 自分の投稿画面 =====
 function MyPostsScreen({ onBack }) {
   const [posts, setPosts] = useState([]);
@@ -545,12 +608,28 @@ export default function App() {
         .modal-btn { width: 100%; padding: 16px; border: none; border-radius: 14px; font-family: 'Zen Maru Gothic', sans-serif; font-size: 16px; font-weight: 900; cursor: pointer; background: rgba(255,255,255,0.08); color: white; }
         .modal-btn.primary { background: linear-gradient(135deg,#ff6b35,#f7931e); }
 
+        .all-questions-btn {
+          width: 100%; margin: 8px 0 4px; padding: 18px;
+          background: rgba(255,255,255,0.06);
+          border: 1.5px dashed rgba(255,255,255,0.15);
+          color: rgba(255,255,255,0.7); border-radius: 16px;
+          font-family: 'Zen Maru Gothic', sans-serif;
+          font-size: 15px; font-weight: 700; cursor: pointer;
+          transition: background 0.2s, color 0.2s;
+        }
+        .all-questions-btn:hover { background: rgba(255,255,255,0.1); color: white; }
+
+        .sort-tabs { display: flex; gap: 6px; margin-left: auto; }
+        .sort-tab { background: rgba(255,255,255,0.08); border: none; color: rgba(255,255,255,0.5); border-radius: 20px; padding: 6px 14px; font-family: 'Zen Maru Gothic', sans-serif; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.2s; }
+        .sort-tab.active { background: linear-gradient(135deg,#ff6b35,#f7931e); color: white; }
+
         @keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
         @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
         @keyframes slideUp { from { transform:translateY(100%); } to { transform:translateY(0); } }
       `}</style>
 
-      {screen === "top"     && <TopScreen onSearch={() => setScreen("search")} onPost={() => setScreen("post")} onMyPosts={() => setScreen("myposts")} onRanking={() => setScreen("ranking")} />}
+      {screen === "top"     && <TopScreen onSearch={() => setScreen("search")} onPost={() => setScreen("post")} onMyPosts={() => setScreen("myposts")} onRanking={() => setScreen("ranking")} onAllQuestions={() => setScreen("all")} />}
+      {screen === "all"      && <AllQuestionsScreen onBack={() => setScreen("top")} />}
       {screen === "search"  && <SearchScreen onBack={() => setScreen("top")} />}
       {screen === "post"    && <PostScreen onBack={() => setScreen("top")} />}
       {screen === "ranking" && <RankingScreen onBack={() => setScreen("top")} />}
