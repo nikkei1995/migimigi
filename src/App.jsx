@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const SUPABASE_URL = "https://wrqdjlajbqdjbsknlcdu.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndycWRqbGFqYnFkamJza25sY2R1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNzQxMjYsImV4cCI6MjA4Nzk1MDEyNn0.XfItAtlYjKppUfDBQgGn9eEDYT2nsUmOwzaW49J1rI0";
@@ -61,6 +61,7 @@ function QuestionCard({ q, answered, onVote, onShare, isSample }) {
   const [chosen, setChosen] = useState(null);
   const [revealed, setRevealed] = useState(false);
   const [votes, setVotes] = useState({ left: q.left_votes || 0, right: q.right_votes || 0 });
+  const votingRef = useRef(false); // 二重投票防止
   // サンプルは何度でも回答可。通常問題は回答済み管理
   const isAnswered = !isSample && !!answered[answerKey];
   const { leftPct, rightPct, total } = calcPct(votes.left, votes.right);
@@ -70,7 +71,9 @@ function QuestionCard({ q, answered, onVote, onShare, isSample }) {
   }, []);
 
   async function handleVote(side) {
-    if (chosen || isAnswered) return;
+    // 二重タップ・連打を即座にブロック
+    if (votingRef.current || chosen || isAnswered) return;
+    votingRef.current = true;
     setChosen(side);
     setRevealed(true);
     setVotes(v => ({ ...v, [side]: v[side] + 1 }));
@@ -79,10 +82,12 @@ function QuestionCard({ q, answered, onVote, onShare, isSample }) {
       onVote && onVote(answerKey);
     }
     // サンプルも通常問題もDBに保存（question テキストで記録）
-    await sb("/votes", {
-      method: "POST",
-      body: JSON.stringify({ question: q.title, side }),
-    });
+    try {
+      await sb("/votes", {
+        method: "POST",
+        body: JSON.stringify({ question: q.title, side }),
+      });
+    } catch(e) { console.error(e); }
   }
 
   return (
@@ -214,13 +219,13 @@ function TopScreen({ onSearch, onPost, onMyPosts, onRanking, onAllQuestions }) {
                 onShare={(q, l, r) => setShareModal({ q, leftPct: l, rightPct: r })} />)}
             </>}
 
-            <div className="section-label">📝 サンプル</div>
-            {samples.map(q => <QuestionCard key={q.id} q={q} answered={{}} isSample={true}
-              onShare={(q, l, r) => setShareModal({ q, leftPct: l, rightPct: r })} />)}
-
             <button className="all-questions-btn" onClick={onAllQuestions}>
               💬 みんなが作った質問をもっと見る →
             </button>
+
+            <div className="section-label">📝 サンプル</div>
+            {samples.map(q => <QuestionCard key={q.id} q={q} answered={{}} isSample={true}
+              onShare={(q, l, r) => setShareModal({ q, leftPct: l, rightPct: r })} />)}
           </>
         )}
         <div style={{ height: 80 }} />
