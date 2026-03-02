@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 
-const SUPABASE_URL = "https://wrqdjlajbqdjbsknlcdu.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndycWRqbGFqYnFkamJza25sY2R1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNzQxMjYsImV4cCI6MjA4Nzk1MDEyNn0.XfItAtlYjKppUfDBQgGn9eEDYT2nsUmOwzaW49J1rI0";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY;
 
 const ANSWERED_KEY = "migimigi_answered";
 function getAnswered() {
